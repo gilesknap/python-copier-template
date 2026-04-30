@@ -1,11 +1,15 @@
 #!/bin/bash
-# Inner script for `just claude`: runs inside a private mount namespace
-# (created by `unshare -m` from the justfile recipe). Mounts tmpfs over
-# the locations VS Code uses for host bridges, builds a Claude-only
-# /root/.gitconfig, then exec's claude with PR_SET_PDEATHSIG so it dies
-# if its parent shell does. Requires CAP_SYS_ADMIN — granted via
-# --cap-add=SYS_ADMIN in devcontainer.json's runArgs. See
-# README-CLAUDE.md for the full sandbox model.
+# Inner script for `just claude`: runs inside private mount AND PID
+# namespaces (created by `unshare -m -p --fork --mount-proc` from the
+# justfile recipe). Mounts tmpfs over the locations VS Code uses for
+# host bridges, builds a Claude-only /root/.gitconfig, then exec's
+# claude with PR_SET_PDEATHSIG so it dies if its parent shell does.
+# This script runs as PID 1 inside the new PID namespace, so
+# /proc/1/root resolves to this script's own root — outer processes
+# (and their /proc/<pid>/root view of the un-namespaced filesystem) are
+# invisible. Requires CAP_SYS_ADMIN — granted via --cap-add=SYS_ADMIN
+# in devcontainer.json's runArgs. See README-CLAUDE.md for the full
+# sandbox model.
 set -euo pipefail
 
 # VS Code drops IPC sockets (vscode-ipc-*.sock, vscode-git-*.sock,

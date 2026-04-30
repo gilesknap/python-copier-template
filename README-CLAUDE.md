@@ -19,12 +19,18 @@ and how to verify the sandbox is intact.
   `vscode-remote-containers-ipc-*.sock` (Dev Containers extension RPC).
   These are re-created on every window attach and continue to appear up
   to ~60s later — see [the threat-model writeup][demmel-blog] — so any
-  one-shot cleanup leaves a window. The defence is the **`unshare -m`**
-  call in `just claude`: Claude runs in a private mount namespace where
-  `/tmp` and `/run/user/<uid>/` are fresh tmpfs. The bridges still exist
-  in the parent namespace (VS Code keeps using them normally) but are
-  invisible to Claude. No race, no sweeper, no recurring check needed.
-  Requires `--cap-add=SYS_ADMIN` in `runArgs` for rootless podman.
+  one-shot cleanup leaves a window. The defence is the **`unshare -m -p
+  --fork --mount-proc`** call in `just claude`: Claude runs in a private
+  mount namespace where `/tmp` and `/run/user/<uid>/` are fresh tmpfs,
+  AND a private PID namespace where the only visible processes are the
+  ones it spawned itself. The mount-namespace hides the bridges from
+  Claude's /tmp; the PID-namespace closes the `/proc/<other-pid>/root`
+  side-channel that would otherwise let Claude dereference an outer
+  process's mount namespace and reach the unmasked host /tmp. The
+  bridges still exist in the parent namespace (VS Code keeps using them
+  normally) but are invisible to Claude. No race, no sweeper, no
+  recurring check needed. Requires `--cap-add=SYS_ADMIN` in `runArgs`
+  for rootless podman.
 
   [demmel-blog]: https://www.danieldemmel.me/blog/coding-agents-in-secured-vscode-dev-containers
 - **No host SSH keys, AWS/GCP/Azure/Docker credentials, GPG keys, or
@@ -119,6 +125,16 @@ in the devcontainer feels natural:
   the host is reachable from inside. This is needed for X11, EPICS CA,
   and to avoid devcontainer port-forwarding hassles. It also means the
   container can talk to anything the host can talk to on its LAN.
+  Claude's `unshare -m -p` does not add `-n`, so this exposure extends
+  into the sandbox: Claude can reach host TCP listeners on `127.0.0.1`
+  (sshd, dev servers, kubelet, etc.) and abstract-namespace unix sockets
+  (e.g. `@/tmp/.X11-unix/X0`) which are net-ns scoped rather than mount-ns
+  scoped. The pathname-bound VS Code IPC sockets in `/tmp` are still
+  defended — those resolve through the mount namespace and `connect(2)`
+  fails with `ENOENT` from inside the sandbox — but anything authenticated
+  only by "the caller is on localhost" should be assumed reachable. Don't
+  run unauthenticated services with secrets bound to `127.0.0.1` while
+  using Claude.
 - **`/cache` is a shared named volume across all devcontainers** built
   from this template — uv cache, pre-commit cache, and the project venv
   live there. Faster rebuilds; the trade-off is that a poisoned cache
@@ -146,6 +162,12 @@ ssh-add -l                                          # "Could not open a connecti
 ls /tmp                                             # only claude-* runtime dirs
 ls /run/user/*/ 2>/dev/null                         # nothing matching vscode-*
 mount | grep -E ' on /tmp |/run/user'               # tmpfs entries from claude-sandbox.sh
+
+# PID namespace: this script should be PID 1, /proc should only see
+# sandbox processes, and /proc/1/root must point at the same mount
+# namespace we're in (so it cannot be used to reach the host /tmp).
+[ "$(readlink /proc/1/ns/mnt)" = "$(readlink /proc/self/ns/mnt)" ]  # exit 0
+ls /proc/1/root/tmp/ | grep -E '^vscode-' && echo LEAK || echo OK
 
 # /root/.ssh and friends should be empty even if you bind-mount the host
 # originals via devcontainer.json — Claude's namespace masks them.
