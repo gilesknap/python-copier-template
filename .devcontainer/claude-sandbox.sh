@@ -1,15 +1,18 @@
 #!/bin/bash
-# Inner script for `just claude`: runs inside private mount AND PID
-# namespaces (created by `unshare -m -p --fork --mount-proc` from the
-# justfile recipe). Mounts tmpfs over the locations VS Code uses for
-# host bridges, builds a Claude-only /root/.gitconfig, then exec's
-# claude with PR_SET_PDEATHSIG so it dies if its parent shell does.
-# This script runs as PID 1 inside the new PID namespace, so
-# /proc/1/root resolves to this script's own root — outer processes
-# (and their /proc/<pid>/root view of the un-namespaced filesystem) are
-# invisible. Requires CAP_SYS_ADMIN — granted via --cap-add=SYS_ADMIN
-# in devcontainer.json's runArgs. See README-CLAUDE.md for the full
-# sandbox model.
+# Inner script for `just claude`: runs inside private mount, PID, and
+# IPC namespaces (created by `unshare -m -p -i --fork --mount-proc` in
+# the justfile recipe). Mounts tmpfs over the locations VS Code uses
+# for host bridges, builds a Claude-only /root/.gitconfig, then exec's
+# claude with PR_SET_PDEATHSIG (so it dies if its parent shell does)
+# AND an empty capability bounding set + PR_SET_NO_NEW_PRIVS (so
+# Claude itself runs with CapEff=0 and cannot regain caps via setuid
+# binaries or file caps). This script runs as PID 1 inside the new PID
+# namespace, so /proc/1/root resolves to this script's own root —
+# outer processes (and their /proc/<pid>/root view of the
+# un-namespaced filesystem) are invisible. Requires CAP_SYS_ADMIN —
+# granted via --cap-add=SYS_ADMIN in devcontainer.json's runArgs — for
+# the unshare and mount calls; the cap is dropped on the final exec.
+# See README-CLAUDE.md for the full sandbox model.
 set -euo pipefail
 
 # VS Code drops IPC sockets (vscode-ipc-*.sock, vscode-git-*.sock,
@@ -83,7 +86,12 @@ mount --bind /etc/claude-gitconfig /root/.gitconfig
 # triggering the VS Code "log in to GitHub" popup. BROWSER points at a
 # host helper that opens URLs in the user's browser — blanked so
 # Claude cannot drive the user's browser.
-exec setpriv --pdeathsig SIGKILL env \
+exec setpriv \
+    --pdeathsig SIGKILL \
+    --no-new-privs \
+    --inh-caps=-all \
+    --bounding-set=-all \
+    env \
     SSH_AUTH_SOCK= \
     GIT_ASKPASS= \
     VSCODE_GIT_IPC_HANDLE= \

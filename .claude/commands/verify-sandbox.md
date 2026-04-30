@@ -124,7 +124,33 @@ entirely. Verify:
   children, and the verifier itself). Seeing dev-container processes
   like `node`, `sshd`, `systemd-*` is a FAIL.
 
-### 8. Credential source is gh, not a host bridge
+### 8. IPC namespace is private
+
+`readlink /proc/1/ns/ipc` must equal `readlink /proc/self/ns/ipc` AND
+must differ from the dev container's IPC namespace. The host's IPC
+namespace ID isn't directly observable from inside, so use a
+behavioural check instead: `cat /proc/sysvipc/shm`, `/proc/sysvipc/msg`,
+and `/proc/sysvipc/sem` must each show only a header line (no entries).
+Any SysV IPC entry whose `cuid`/`cgid` is not `0` is a FAIL — it would
+indicate Claude shares the IPC namespace with host processes that have
+allocated segments. (Empty tables are fine even when the IPC ns is
+shared, but they remain a PASS here because the namespace separation
+ensures no future leak.)
+
+### 9. Capability bounding set is empty
+
+`grep ^Cap /proc/self/status` must show `CapPrm`, `CapEff`, `CapBnd`,
+`CapInh`, and `CapAmb` all equal to `0000000000000000`. Any non-zero
+value (especially `CapBnd` or `CapEff` containing `CAP_SYS_ADMIN` =
+bit 21, decimal 2097152) is a FAIL — it means `setpriv
+--bounding-set=-all` did not run, and Claude could call `mount(2)`,
+`bpf(2)`, `setns(2)`, or other capability-gated syscalls.
+
+`cat /proc/self/status | grep ^NoNewPrivs` must read `NoNewPrivs: 1`.
+A `0` is a FAIL — it means a setuid or file-capability binary execed
+inside Claude could regain caps.
+
+### 10. Credential source is gh, not a host bridge
 
 `printf 'protocol=https\nhost=github.com\n\n' | git credential fill`
 must return a `password=` line. The token prefix tells you the source:
@@ -157,7 +183,10 @@ CHECK                                        STATUS  DETAIL
 7b. /proc/1/root/tmp/ has no vscode sockets   PASS/FAIL  ...
 7c. PID 1 comm is sandbox process             PASS/FAIL  ...
 7d. /proc shows only sandbox PIDs             PASS/FAIL  ...
-8.  git credential fill source is gh          PASS/FAIL/N/A  ...
+8.  IPC namespace is private                  PASS/FAIL  ...
+9a. CapEff/CapBnd/CapInh/CapAmb all zero      PASS/FAIL  ...
+9b. NoNewPrivs is 1                           PASS/FAIL  ...
+10. git credential fill source is gh          PASS/FAIL/N/A  ...
 ```
 
 End with one line: `RESULT: SANDBOX OK` if every check is PASS or N/A,
