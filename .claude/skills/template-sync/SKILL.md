@@ -42,3 +42,19 @@ The list can drift; use `find template/` to discover other counterparts.
   template's uses just `unshare -m`. If the user has chosen to harden
   one side and not the other, do not "fix" the divergence without
   asking.
+
+## CI enforcement
+
+Two tests in `tests/test_example.py` enforce parity for files that
+matter — drift fails CI:
+
+- `test_gitignore_same` — `.gitignore` must equal `template/.gitignore`
+  byte-for-byte.
+- `test_meta_matches_template` — meta's `.devcontainer/devcontainer.json`
+  and `Dockerfile` must equal what the template renders with the meta
+  repo's options (`add_claude=True, docker=False`).
+
+If you change one side of a pair these tests cover, mirror to the other
+side or expect CI to fail. The render command for the second test is
+`copy_project(tmp_path, add_claude=True, docker=False, docker_debug=False)`
+in `tests/test_example.py`.
