@@ -118,8 +118,11 @@ add_claude:
     help: |
         Add a Claude Code sandbox to the devcontainer?
         Disables host SSH agent / VS Code git credential injection inside
-        the container, mounts ~/.claude from the host, installs Claude Code
-        CLI, and enables `--dangerously-skip-permissions` autopilot mode.
+        the container, mounts ~/.config/terminal-config/.claude as the
+        container's /root/.claude (shared across all template
+        devcontainers; symlink ~/.claude into it to share with the host),
+        installs Claude Code CLI, and enables
+        `--dangerously-skip-permissions` autopilot mode.
 
 docs_type:
     type: str

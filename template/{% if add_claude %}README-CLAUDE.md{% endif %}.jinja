@@ -101,11 +101,24 @@ in the devcontainer feels natural:
 
 ## What's deliberately exposed (and why)
 
-- **`/root/.claude` is bind-mounted from the host's `~/.claude`.** Claude's
-  settings, memory, hooks, and skills are shared between the host and the
-  container — that's the whole point. Anything Claude writes to its own
-  config persists to the host home directory. Treat `~/.claude` on the
-  host as part of the sandbox boundary, not outside it.
+- **`/root/.claude` is bind-mounted from `~/.config/terminal-config/.claude`.**
+  Claude's settings, memory, hooks, and skills live in a shared location
+  under `terminal-config`, so every devcontainer built from this template
+  sees the same `.claude` — install a skill once and every project picks
+  it up. Anything Claude writes to its own config persists there. Treat
+  `~/.config/terminal-config/.claude` on the host as part of the sandbox
+  boundary, not outside it.
+
+  To share with a host-side Claude install, opt in by replacing the
+  shared dir with a symlink before the first container build:
+
+  ```bash
+  rm -rf ~/.config/terminal-config/.claude    # only if empty / disposable
+  ln -s ~/.claude ~/.config/terminal-config/.claude
+  ```
+
+  Without the symlink the container's `.claude` is independent of any
+  `~/.claude` you may have on the host.
 - **`/workspaces` is the parent of the project, not the project itself.**
   The `workspaceMount` source is `${localWorkspaceFolder}/..`, so all
   sibling repos in the same parent directory are visible inside the

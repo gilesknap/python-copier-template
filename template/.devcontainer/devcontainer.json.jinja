@@ -50,8 +50,8 @@
             ]
         }
     },
-    // Create host-side dirs needed for bind mounts before the container starts
-    "initializeCommand": "mkdir -p ${localEnv:HOME}/.config/terminal-config{% if add_claude %} ${localEnv:HOME}/.claude{% endif %}",
+    "postCreateCommand": ".devcontainer/postCreate.sh",
+    "initializeCommand": ".devcontainer/initializeCommand.sh",
     "runArgs": [
         // Allow the container to access the host X11 display and EPICS CA
         "--net=host",
@@ -86,14 +86,16 @@
             "target": "/root/.config/glab-cli",
             "type": "volume"
         },
-        // Mount Claude config from host (settings, memory, skills)
+        // Mount Claude config (settings, memory, skills) from a shared
+        // location under terminal-config. All python-copier-template
+        // devcontainers see the same .claude; users who want host sync
+        // can symlink ~/.claude -> ~/.config/terminal-config/.claude.
         {
-            "source": "${localEnv:HOME}/.claude",
+            "source": "${localEnv:HOME}/.config/terminal-config/.claude",
             "target": "/root/.claude",
             "type": "bind"
         }{% endif %}
     ],
     // Mount the parent as /workspaces so we can pip install peers as editable
-    "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspaces,type=bind",
-    "postCreateCommand": ".devcontainer/postCreate.sh"
+    "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspaces,type=bind"
 }
