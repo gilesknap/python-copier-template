@@ -60,6 +60,14 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Conventional Commits
+
+**This repo uses [Conventional Commits](https://www.conventionalcommits.org/) for commit messages and PR titles.**
+
+Format: `type(scope): subject` — e.g. `feat(sandbox): add IPC namespace`, `fix(template): drop trailing blank`.
+
+Common types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `build`, `ci`.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
