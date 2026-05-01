@@ -1,10 +1,12 @@
 # Claude sandbox
 
 This project's devcontainer is configured to run Claude Code with
-`--dangerously-skip-permissions` (see `justfile`'s `claude` recipe). To make
-that safe, the container is set up as a sandbox: Claude can use the project
-toolchain, push/pull through PATs it owns, and persist its own settings —
-but it cannot reach back to the host's identity or shared resources.
+`--allow-dangerously-skip-permissions --permission-mode auto` (see `justfile`'s
+`claude` recipe): the bypass-permissions mode is available on demand, but
+Claude starts in `auto` mode by default. To make the bypass option safe, the
+container is set up as a sandbox: Claude can use the project toolchain,
+push/pull through PATs it owns, and persist its own settings — but it cannot
+reach back to the host's identity or shared resources.
 
 This file documents what's locked down, what's deliberately left exposed,
 and how to verify the sandbox is intact.
@@ -227,7 +229,7 @@ just glab-auth   # gitlab.com  (pass a hostname arg for self-hosted instances)
 ## Starting Claude
 
 ```bash
-just claude      # runs `claude --dangerously-skip-permissions` inside the mount namespace
+just claude      # runs `claude --allow-dangerously-skip-permissions --permission-mode auto` inside the mount namespace
 ```
 
 After a rebuild from a previous version of this template, the user

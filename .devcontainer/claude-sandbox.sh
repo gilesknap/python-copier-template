@@ -100,4 +100,4 @@ exec setpriv \
     VSCODE_IPC_HOOK_CLI= \
     BROWSER= \
     IS_SANDBOX=1 \
-    claude --dangerously-skip-permissions
+    claude --allow-dangerously-skip-permissions --permission-mode auto

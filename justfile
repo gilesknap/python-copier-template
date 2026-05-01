@@ -1,4 +1,4 @@
-# Start Claude Code in sandbox mode (no SSH agent, skip permission prompts).
+# Start Claude Code in sandbox mode (no SSH agent, auto permission mode).
 # Runs Claude inside private mount, PID, AND IPC namespaces so VS Code's
 # host-bridge sockets (vscode-ipc-*.sock, vscode-git-*.sock,
 # vscode-ssh-auth-*.sock, vscode-remote-containers-ipc-*.sock) in /tmp
