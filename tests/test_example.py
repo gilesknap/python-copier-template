@@ -218,7 +218,11 @@ def test_meta_matches_template(tmp_path: Path):
         docker=False,
         docker_debug=False,
     )
-    for relpath in [".devcontainer/devcontainer.json", "Dockerfile"]:
+    for relpath in [
+        ".devcontainer/devcontainer.json",
+        ".devcontainer/initializeCommand.sh",
+        "Dockerfile",
+    ]:
         rendered = (tmp_path / relpath).read_text()
         meta = (TOP / relpath).read_text()
         assert rendered == meta, (
