@@ -1,10 +1,12 @@
 # Claude sandbox
 
 This project's devcontainer is configured to run Claude Code with
-`--dangerously-skip-permissions` (see `justfile`'s `claude` recipe). To make
-that safe, the container is set up as a sandbox: Claude can use the project
-toolchain, push/pull through PATs it owns, and persist its own settings —
-but it cannot reach back to the host's identity or shared resources.
+`--allow-dangerously-skip-permissions --permission-mode auto` (see `justfile`'s
+`claude` recipe): the bypass-permissions mode is available on demand, but
+Claude starts in `auto` mode by default. To make the bypass option safe, the
+container is set up as a sandbox: Claude can use the project toolchain,
+push/pull through PATs it owns, and persist its own settings — but it cannot
+reach back to the host's identity or shared resources.
 
 This file documents what's locked down, what's deliberately left exposed,
 and how to verify the sandbox is intact.
@@ -19,14 +21,38 @@ and how to verify the sandbox is intact.
   `vscode-remote-containers-ipc-*.sock` (Dev Containers extension RPC).
   These are re-created on every window attach and continue to appear up
   to ~60s later — see [the threat-model writeup][demmel-blog] — so any
-  one-shot cleanup leaves a window. The defence is the **`unshare -m`**
-  call in `just claude`: Claude runs in a private mount namespace where
-  `/tmp` and `/run/user/<uid>/` are fresh tmpfs. The bridges still exist
-  in the parent namespace (VS Code keeps using them normally) but are
-  invisible to Claude. No race, no sweeper, no recurring check needed.
-  Requires `--cap-add=SYS_ADMIN` in `runArgs` for rootless podman.
+  one-shot cleanup leaves a window. The defence is the **`unshare -m -p
+  -i --fork --mount-proc`** call in `just claude`: Claude runs in
+  private mount, PID, and IPC namespaces. `/tmp` and `/run/user/<uid>/`
+  are fresh tmpfs; the only visible processes are the ones Claude
+  spawned itself; SysV shared memory / message queues / semaphores are
+  scoped to the namespace. The mount-namespace hides the bridges from
+  Claude's /tmp; the PID-namespace closes the `/proc/<other-pid>/root`
+  side-channel that would otherwise let Claude dereference an outer
+  process's mount namespace and reach the unmasked host /tmp; the
+  IPC-namespace prevents future host SysV IPC segments from leaking
+  in (the host doesn't allocate any today, but the boundary is cheap).
+  The bridges still exist in the parent namespace (VS Code keeps using
+  them normally) but are invisible to Claude. No race, no sweeper, no
+  recurring check needed. Requires `--cap-add=SYS_ADMIN` in `runArgs`
+  for rootless podman.
 
   [demmel-blog]: https://www.danieldemmel.me/blog/coding-agents-in-secured-vscode-dev-containers
+- **Claude runs with no kernel capabilities.** `claude-sandbox.sh` needs
+  `CAP_SYS_ADMIN` for its `unshare`/`mount` calls, but by the time
+  mounts are done that capability is no longer useful — only dangerous.
+  The final `setpriv` exec passes `--bounding-set=-all --inh-caps=-all
+  --no-new-privs`, so the bounding set is empty when claude-the-binary
+  starts and `P'(perm) = (P(inh) | all-ones) & P(bnd) = 0` — `CapEff`,
+  `CapPrm`, and `CapBnd` are all `0000000000000000` inside Claude.
+  This neuters several capability-gated escape paths (`mount(2)`,
+  `pivot_root(2)`, `bpf(2)`, `mknod(S_IFBLK)`) at the cap check, on top
+  of the existing user-namespace barrier. `PR_SET_NO_NEW_PRIVS` blocks
+  any future `execve()` of a setuid or file-cap binary from regaining
+  privileges. Trade-off: `chown` to a non-root UID returns `EPERM`, so
+  `apt-get install` postinst scripts that chown logs to system users
+  will fail; install system packages from a non-Claude terminal if you
+  need that.
 - **No host SSH keys, AWS/GCP/Azure/Docker credentials, GPG keys, or
   netrc.** The same `unshare -m` masks `/root/.ssh`, `/root/.gnupg`,
   `/root/.aws`, `/root/.azure`, `/root/.gcloud`, `/root/.docker`, and
@@ -119,6 +145,16 @@ in the devcontainer feels natural:
   the host is reachable from inside. This is needed for X11, EPICS CA,
   and to avoid devcontainer port-forwarding hassles. It also means the
   container can talk to anything the host can talk to on its LAN.
+  Claude's `unshare -m -p` does not add `-n`, so this exposure extends
+  into the sandbox: Claude can reach host TCP listeners on `127.0.0.1`
+  (sshd, dev servers, kubelet, etc.) and abstract-namespace unix sockets
+  (e.g. `@/tmp/.X11-unix/X0`) which are net-ns scoped rather than mount-ns
+  scoped. The pathname-bound VS Code IPC sockets in `/tmp` are still
+  defended — those resolve through the mount namespace and `connect(2)`
+  fails with `ENOENT` from inside the sandbox — but anything authenticated
+  only by "the caller is on localhost" should be assumed reachable. Don't
+  run unauthenticated services with secrets bound to `127.0.0.1` while
+  using Claude.
 - **`/cache` is a shared named volume across all devcontainers** built
   from this template — uv cache, pre-commit cache, and the project venv
   live there. Faster rebuilds; the trade-off is that a poisoned cache
@@ -146,6 +182,22 @@ ssh-add -l                                          # "Could not open a connecti
 ls /tmp                                             # only claude-* runtime dirs
 ls /run/user/*/ 2>/dev/null                         # nothing matching vscode-*
 mount | grep -E ' on /tmp |/run/user'               # tmpfs entries from claude-sandbox.sh
+
+# PID namespace: this script should be PID 1, /proc should only see
+# sandbox processes, and /proc/1/root must point at the same mount
+# namespace we're in (so it cannot be used to reach the host /tmp).
+[ "$(readlink /proc/1/ns/mnt)" = "$(readlink /proc/self/ns/mnt)" ]  # exit 0
+ls /proc/1/root/tmp/ | grep -E '^vscode-' && echo LEAK || echo OK
+
+# Capabilities: setpriv must have stripped the bounding set before exec,
+# so claude-the-binary runs with CapEff=CapBnd=0. NoNewPrivs blocks
+# regaining caps via setuid/file-cap binaries.
+grep -E '^Cap(Eff|Bnd|Inh|Amb)' /proc/self/status   # all 0000000000000000
+grep ^NoNewPrivs /proc/self/status                  # NoNewPrivs: 1
+
+# IPC namespace: SysV IPC tables visible from inside should hold no
+# host-allocated segments (they would have non-root cuid/cgid).
+cat /proc/sysvipc/shm /proc/sysvipc/msg /proc/sysvipc/sem  # only headers
 
 # /root/.ssh and friends should be empty even if you bind-mount the host
 # originals via devcontainer.json — Claude's namespace masks them.
@@ -177,7 +229,7 @@ just glab-auth   # gitlab.com  (pass a hostname arg for self-hosted instances)
 ## Starting Claude
 
 ```bash
-just claude      # runs `claude --dangerously-skip-permissions` inside the mount namespace
+just claude      # runs `claude --allow-dangerously-skip-permissions --permission-mode auto` inside the mount namespace
 ```
 
 After a rebuild from a previous version of this template, the user
