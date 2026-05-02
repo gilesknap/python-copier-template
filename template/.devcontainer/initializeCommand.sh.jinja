@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+
+# Create host-side dirs needed for bind mounts before the container starts.
+# `terminal-config` holds shell config shared across every devcontainer.
+mkdir -p "$HOME/.config/terminal-config"
