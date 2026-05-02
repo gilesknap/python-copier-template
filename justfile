@@ -18,6 +18,20 @@ claude:
 # Authenticate gh CLI with a GitHub PAT (token not stored in shell history)
 gh-auth:
     #!/bin/bash
+    cat <<'EOF'
+    Create or renew a fine-grained PAT at:
+      https://github.com/settings/personal-access-tokens
+
+    Recommended settings for a sandboxed Claude Code:
+      - Resource owner: your user (or org that owns this repo)
+      - Repository access: Only select repositories -> just this repo
+      - Expiration: short (e.g. 30 days) so a leaked token expires quickly
+      - Repository permissions (Read and Write):
+          Contents, Issues, Pull requests
+        (Metadata: Read-only is added automatically)
+      - Leave everything else unset / no access
+
+    EOF
     read -sp "GitHub PAT: " t && echo
     echo "$t" | gh auth login --with-token
     unset t
