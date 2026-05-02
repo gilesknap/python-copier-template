@@ -4,7 +4,11 @@
     "build": {
         "dockerfile": "../Dockerfile",
         "target": "developer"
-    },
+    },{% if add_claude %}
+    // Tell VS Code the remote user is root so copyGitConfig writes to
+    // /root/.gitconfig (matching $HOME in the shell); otherwise it falls back
+    // to the base image's USER and the copy lands in the wrong home.
+    "remoteUser": "root",{% endif %}
     "remoteEnv": {
         // Allow X11 apps to run inside the container
         "DISPLAY": "${localEnv:DISPLAY}",
@@ -41,7 +45,8 @@
                 "redhat.vscode-yaml",
                 "ryanluker.vscode-coverage-gutters",
                 "charliermarsh.ruff",
-                "ms-azuretools.vscode-docker"
+                "ms-azuretools.vscode-docker"{% if add_claude %},
+                "anthropic.claude-code"{% endif %}
             ]
         }
     },
@@ -54,7 +59,10 @@
         "--security-opt=label=disable",
         // Block setuid/setgid escalation. Safe here: rootless container runs
         // as root and has no need for sudo, so nothing legitimate elevates.
-        "--security-opt=no-new-privileges"
+        "--security-opt=no-new-privileges"{% if add_claude %},
+        // Required for `unshare -m` in the `just claude` recipe; without it,
+        // rootless podman blocks mount-namespace creation. See README-CLAUDE.md.
+        "--cap-add=SYS_ADMIN"{% endif %}
     ],
     "mounts": [
         // Mount in the user terminal config folder so it can be edited
@@ -68,7 +76,28 @@
             "source": "devcontainer-shared-cache",
             "target": "/cache",
             "type": "volume"
-        }
+        }{% if add_claude %},
+        // Persist gh auth across container rebuilds with per-repo scoped PAT
+        {
+            "source": "gh-auth-${localWorkspaceFolderBasename}",
+            "target": "/root/.config/gh",
+            "type": "volume"
+        },
+        // Persist glab auth across container rebuilds (GitLab CLI)
+        {
+            "source": "glab-auth-${localWorkspaceFolderBasename}",
+            "target": "/root/.config/glab-cli",
+            "type": "volume"
+        },
+        // Mount Claude config (settings, memory, skills) from a shared
+        // location under terminal-config. All python-copier-template
+        // devcontainers see the same .claude; users who want host sync
+        // can symlink ~/.claude -> ~/.config/terminal-config/.claude.
+        {
+            "source": "${localEnv:HOME}/.config/terminal-config/.claude",
+            "target": "/root/.claude",
+            "type": "bind"
+        }{% endif %}
     ],
     // Mount the parent as /workspaces so we can pip install peers as editable
     "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspaces,type=bind"

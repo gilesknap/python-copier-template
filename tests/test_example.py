@@ -206,6 +206,44 @@ def test_gitignore_same():
         assert top_gi.read() == template_gi.read()
 
 
+def test_meta_matches_template(tmp_path: Path):
+    """The meta repo's sandbox / devcontainer / Claude assets must match
+    what the template renders with the meta repo's own options: Claude on
+    (the meta repo dogfoods the sandbox) and docker off (the meta repo
+    isn't a deployable service). Catches drift between the meta repo and
+    the template it ships."""
+    copy_project(
+        tmp_path,
+        add_claude=True,
+        docker=False,
+        docker_debug=False,
+    )
+    relpaths = [
+        ".devcontainer/devcontainer.json",
+        ".devcontainer/initializeCommand.sh",
+        ".devcontainer/claude-sandbox.sh",
+        "Dockerfile",
+        "justfile",
+        "CLAUDE.md",
+        "README-CLAUDE.md",
+    ]
+    # Glob the rendered side so meta-only commands (e.g. verify-sandbox.md
+    # which deliberately ships only in this repo) don't fail the assertion.
+    relpaths.extend(
+        f".claude/commands/{p.name}"
+        for p in (tmp_path / ".claude/commands").glob("*.md")
+    )
+    relpaths.extend(
+        f".claude/hooks/{p.name}" for p in (tmp_path / ".claude/hooks").glob("*")
+    )
+    for relpath in relpaths:
+        rendered = (tmp_path / relpath).read_text()
+        meta = (TOP / relpath).read_text()
+        assert rendered == meta, (
+            f"{relpath} drift between meta repo and template (add_claude=yes)"
+        )
+
+
 def test_private_member_access(tmp_path: Path):
     code = """
 class MyClass:
