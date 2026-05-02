@@ -67,21 +67,42 @@ and how to verify the sandbox is intact.
   `unshare`'d shell exits (terminal closed, Ctrl-C, etc.) the kernel
   immediately kills Claude — there's no orphaned-claude window where the
   namespace context is gone but Claude is still running tools.
-- **Claude has its own `/root/.gitconfig` via bind-mount.**
-  `claude-sandbox.sh` writes `/etc/claude-gitconfig` containing only the
-  in-container gh/glab credential helpers, the `git@*:` → `https://`
-  url rewrites, `safe.directory = *`, and the user identity (read from
-  the host-copied gitconfig before we bind over it, so commits Claude
-  makes are still attributed). It then `mount --bind`s that file onto
-  `/root/.gitconfig` inside Claude's namespace. The user's regular
-  terminal keeps the original `/root/.gitconfig` (host content, copied
-  by `dev.containers.copyGitConfig`'s default), so the host's SSH url
+- **Claude's git is redirected away from the host gitconfigs by env
+  vars, not bind mounts.** `claude-sandbox.sh` writes
+  `/etc/claude-gitconfig` containing only the in-container gh/glab
+  credential helpers, the `git@*:` → `https://` url rewrites,
+  `safe.directory = *`, and the user identity (read from the
+  host-copied gitconfig before the env redirection takes effect, so
+  commits Claude makes are still attributed). The exec line then sets
+  `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` and
+  `GIT_CONFIG_SYSTEM=/dev/null`, so git ignores `/root/.gitconfig`
+  (host per-user config) and `/etc/gitconfig` (host system-scope
+  credential helper) entirely. Process env on Claude's tree — not in
+  the mount table, not invalidated by file-level operations in the
+  parent. The user's regular terminal keeps the original
+  `/root/.gitconfig` (host content, copied by
+  `dev.containers.copyGitConfig`'s default), so the host's SSH url
   rewrites, custom credential helpers, and identity all work normally
-  outside Claude — but Claude only ever sees the curated config.
-  `/etc/gitconfig` (system scope) is also masked: VS Code dev-container
-  images bake a `credential.helper` there that shells out via
-  `/tmp/vscode-remote-containers-*.js`, so `claude-sandbox.sh` binds
-  `/dev/null` over it inside the namespace.
+  outside Claude.
+
+  An earlier version of this script `mount --bind`'d the curated file
+  over `/root/.gitconfig` and `/dev/null` over `/etc/gitconfig`. Both
+  binds were silently invalidated mid-session: VS Code's
+  `dev.containers.copyGitConfig` rewrites `/root/.gitconfig` on every
+  reconnect via `write-tmp + rename(2)`, which replaces the dentry the
+  bind was attached to. The mount table entry orphans and the path
+  reverts to the parent's view — no `umount`, no propagation breach,
+  no `CAP_SYS_ADMIN` reach-in required. **File-bind mounts on the
+  shared overlay filesystem are fragile under atomic-rename rewrites
+  in the parent namespace.** Tmpfs-over-a-directory mounts (`/tmp`,
+  `/root/.ssh`) are immune to this specific failure because nothing
+  atomically replaces directory dentries. Tools that ignore
+  `GIT_CONFIG_GLOBAL` and read `/root/.gitconfig` directly will see
+  the host content, but every credential bridge that content
+  references — VS Code's git-credential helper script, the SSH agent
+  socket, the askpass shim — lives in `/tmp` (tmpfs-masked) or under
+  `/run/user` (tmpfs-masked when present), so reading the path doesn't
+  yield reachable credentials.
 - **The "log in to GitHub" popup is closed for Claude.** The user
   terminal keeps `git.terminalAuthentication` at its default (true), so
   `GIT_ASKPASS` and `VSCODE_GIT_IPC_HANDLE` are injected into terminals
@@ -216,12 +237,13 @@ cat /proc/sysvipc/shm /proc/sysvipc/msg /proc/sysvipc/sem  # only headers
 # originals via devcontainer.json — Claude's namespace masks them.
 ls /root/.ssh /root/.gnupg /root/.aws 2>/dev/null   # all empty (or missing)
 
-# Claude's bind-mounted gitconfig: only gh/glab helpers + HTTPS rewrites,
-# no host SSH url rewrites or unrelated host helpers.
-git config --global --list | grep -E 'credential|insteadof'
-mount | grep '/root/.gitconfig'                     # bind from /etc/claude-gitconfig
-git config --system --get credential.helper         # should exit non-zero
-mount | grep '/etc/gitconfig'                       # bind from /dev/null
+# Git redirection via env vars, not mount table. /root/.gitconfig is
+# expected to show the host content; git ignores it because
+# GIT_CONFIG_GLOBAL points elsewhere.
+echo "$GIT_CONFIG_GLOBAL"                           # /etc/claude-gitconfig
+echo "$GIT_CONFIG_SYSTEM"                           # /dev/null
+git config --global --list | grep -E 'credential|insteadof'  # curated only
+git config --system --list                          # empty (reads /dev/null)
 
 # Should return creds only if `just gh-auth` has been run for this repo.
 printf 'protocol=https\nhost=github.com\n\n' | git credential fill

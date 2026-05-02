@@ -72,10 +72,19 @@ Each of these must be empty or absent:
 A non-empty `/root/.ssh` (containing `id_*` or `authorized_keys`) is a
 critical FAIL — the host SSH keys are reachable.
 
-### 6. Gitconfig bind-mount
+### 6. Gitconfig redirection
 
-- `mount | grep '/root/.gitconfig'` must show a bind mount (typically
-  `fuse-overlayfs` or `bind` from `/etc/claude-gitconfig`).
+`claude-sandbox.sh` redirects git via env vars on the `setpriv` exec
+line, not bind mounts (atomic-rename rewrites of `/root/.gitconfig` by
+VS Code's `dev.containers.copyGitConfig` invalidated the bind silently).
+
+- `GIT_CONFIG_GLOBAL` must equal `/etc/claude-gitconfig`. Anything else
+  (including unset) is a FAIL — git would fall back to host-injected
+  `/root/.gitconfig`.
+- `GIT_CONFIG_SYSTEM` must equal `/dev/null`. Anything else is a FAIL —
+  git would read the host `/etc/gitconfig`, which can carry
+  `url.insteadof`, `http.proxy`, `core.hooksPath`, or credential
+  helpers that bypass the curated config.
 - `git config --global --list` must contain ONLY:
   - `user.name` / `user.email` (host identity, copied through),
   - `safe.directory=*`,
@@ -86,14 +95,6 @@ critical FAIL — the host SSH keys are reachable.
 - Any other `credential.*.helper` (especially one pointing at
   `/tmp/vscode-remote-containers-*.js` or `/.vscode-server/...`) is a
   FAIL.
-- `/etc/gitconfig` must be masked (bind-mounted to `/dev/null` or
-  absent). `mount | grep '/etc/gitconfig'` should show a bind mount
-  whose source is `/dev/null` (appears as `devtmpfs` with `mode=755`,
-  inode for major 1 / minor 3), OR `ls /etc/gitconfig` returns
-  "No such file or directory". A regular file at `/etc/gitconfig` with
-  any contents is a FAIL — the host's system-scope gitconfig is
-  reachable and could carry `url.insteadof`, `http.proxy`,
-  `core.hooksPath`, or credential helpers that bypass /root/.gitconfig.
 - System scope must be empty: `git config --system --list` must produce
   no output (exit 0 with empty stdout, or exit non-zero). Any line is a
   FAIL — broader than just `credential.helper`, since `core.hooksPath`
@@ -175,10 +176,10 @@ CHECK                                        STATUS  DETAIL
 4b. No vscode-*.sock in /tmp                  PASS/FAIL  ...
 4c. No vscode-* in /run/user                  PASS/FAIL  ...
 5.  Host credential dirs masked               PASS/FAIL  ...
-6a. /root/.gitconfig bind-mounted             PASS/FAIL  ...
-6b. Gitconfig contents are sandbox-only       PASS/FAIL  ...
-6c. /etc/gitconfig masked                     PASS/FAIL  ...
-6d. System-scope gitconfig is empty           PASS/FAIL  ...
+6a. GIT_CONFIG_GLOBAL=/etc/claude-gitconfig    PASS/FAIL  ...
+6b. GIT_CONFIG_SYSTEM=/dev/null                PASS/FAIL  ...
+6c. Gitconfig contents are sandbox-only        PASS/FAIL  ...
+6d. System-scope gitconfig is empty            PASS/FAIL  ...
 7a. PID 1 shares our mount namespace          PASS/FAIL  ...
 7b. /proc/1/root/tmp/ has no vscode sockets   PASS/FAIL  ...
 7c. PID 1 comm is sandbox process             PASS/FAIL  ...

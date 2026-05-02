@@ -233,6 +233,9 @@ def test_meta_matches_template(tmp_path: Path):
         f".claude/commands/{p.name}"
         for p in (tmp_path / ".claude/commands").glob("*.md")
     )
+    relpaths.extend(
+        f".claude/hooks/{p.name}" for p in (tmp_path / ".claude/hooks").glob("*")
+    )
     for relpath in relpaths:
         rendered = (tmp_path / relpath).read_text()
         meta = (TOP / relpath).read_text()

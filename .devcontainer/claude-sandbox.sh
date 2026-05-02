@@ -1,18 +1,20 @@
 #!/bin/bash
 # Inner script for `just claude`: runs inside private mount, PID, and
 # IPC namespaces (created by `unshare -m -p -i --fork --mount-proc` in
-# the justfile recipe). Mounts tmpfs over the locations VS Code uses
-# for host bridges, builds a Claude-only /root/.gitconfig, then exec's
-# claude with PR_SET_PDEATHSIG (so it dies if its parent shell does)
-# AND an empty capability bounding set + PR_SET_NO_NEW_PRIVS (so
-# Claude itself runs with CapEff=0 and cannot regain caps via setuid
-# binaries or file caps). This script runs as PID 1 inside the new PID
-# namespace, so /proc/1/root resolves to this script's own root —
-# outer processes (and their /proc/<pid>/root view of the
-# un-namespaced filesystem) are invisible. Requires CAP_SYS_ADMIN —
-# granted via --cap-add=SYS_ADMIN in devcontainer.json's runArgs — for
-# the unshare and mount calls; the cap is dropped on the final exec.
-# See README-CLAUDE.md for the full sandbox model.
+# the justfile recipe). Tmpfs-masks the directories VS Code uses for
+# host bridges, writes a Claude-only /etc/claude-gitconfig, and exec's
+# claude with GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM pointed away from the
+# host gitconfigs — plus PR_SET_PDEATHSIG (so claude dies if the
+# wrapping shell does), an empty capability bounding set, and
+# PR_SET_NO_NEW_PRIVS (so Claude runs with CapEff=0 and cannot regain
+# caps via setuid binaries or file caps). The git redirection is via
+# env vars rather than file-bind mounts because file-bind mounts on
+# /etc/gitconfig and /root/.gitconfig are silently invalidated by
+# atomic-rename rewrites from VS Code's dev.containers.copyGitConfig
+# on every reconnect — see README-CLAUDE.md for the full reasoning.
+# Requires CAP_SYS_ADMIN — granted via --cap-add=SYS_ADMIN in
+# devcontainer.json's runArgs — for the unshare and mount calls; the
+# cap is dropped on the final exec.
 set -euo pipefail
 
 # VS Code drops IPC sockets (vscode-ipc-*.sock, vscode-git-*.sock,
@@ -40,24 +42,18 @@ if [ -e /root/.netrc ]; then
     mount --bind /dev/null /root/.netrc
 fi
 
-# /etc/gitconfig (system scope) on a VS Code dev-container image carries a
-# credential.helper that shells out via /tmp/vscode-remote-containers-*.js —
-# the same bridge the per-user mask defends against. Bind /dev/null over it
-# so Claude sees an empty system config; only the URL-scoped gh/glab helpers
-# in /root/.gitconfig remain. The user's regular terminal is unaffected.
-if [ -e /etc/gitconfig ]; then
-    mount --bind /dev/null /etc/gitconfig
-fi
-
-# Build a Claude-only /root/.gitconfig containing the in-container
-# credential helpers (gh / glab) and HTTPS rewrites — and nothing else
-# the user has on the host (no SSH url rewrites, no host-specific
-# helpers). User identity is read from the original gitconfig BEFORE
-# we bind over it, so commits Claude makes are still attributed.
+# Build a Claude-only gitconfig at /etc/claude-gitconfig containing the
+# in-container credential helpers (gh / glab) and HTTPS rewrites — and
+# nothing else the user has on the host (no SSH url rewrites, no
+# host-specific helpers). User identity is read from the original
+# gitconfig BEFORE the env redirection takes effect on the exec line,
+# so commits Claude makes are still attributed. Hardcode the gh/glab
+# paths — `command -v` could resolve to a `.vscode-server`-pathed
+# binary in some setups and embed that string into our helper line,
+# which would later trip the sandbox-check hook on what looks like a
+# VS Code credential bridge.
 git_name=$(git config --get user.name 2>/dev/null || true)
 git_email=$(git config --get user.email 2>/dev/null || true)
-gh_path=$(command -v gh || echo /usr/bin/gh)
-glab_path=$(command -v glab || echo /usr/local/bin/glab)
 cat > /etc/claude-gitconfig <<EOF
 [user]
     name = $git_name
@@ -70,12 +66,25 @@ cat > /etc/claude-gitconfig <<EOF
     insteadOf = git@gitlab.diamond.ac.uk:
 [credential "https://github.com"]
     helper =
-    helper = !$gh_path auth git-credential
+    helper = !/usr/bin/gh auth git-credential
 [credential "https://gitlab.diamond.ac.uk"]
     helper =
-    helper = !$glab_path auth git-credential
+    helper = !/usr/local/bin/glab auth git-credential
 EOF
-mount --bind /etc/claude-gitconfig /root/.gitconfig
+# No mount --bind on /etc/gitconfig or /root/.gitconfig: VS Code's
+# dev.containers.copyGitConfig atomically rewrites /root/.gitconfig
+# (write-tmp + rename) on every reconnect, which replaces the dentry
+# our bind would attach to and silently invalidates the bind. Same
+# fragility applies to any file-bind whose target is on the shared
+# overlay filesystem. Instead we redirect git via GIT_CONFIG_GLOBAL
+# and GIT_CONFIG_SYSTEM env vars on the exec line — process env on
+# Claude's tree, not in the mount table, so it cannot be invalidated
+# by file-level operations in the parent. Tools that ignore those
+# env vars and read /root/.gitconfig directly will see host content,
+# but every credential bridge that content references (VS Code git
+# helper script, SSH agent socket, askpass) lives in /tmp or under
+# /run/user — both tmpfs-masked above — so reading the path doesn't
+# yield reachable credentials.
 
 # IS_SANDBOX=1 is the canary `.claude/hooks/sandbox-check.sh` keys off.
 # Env-blanks: SSH_AUTH_SOCK / VSCODE_GIT_IPC_HANDLE / VSCODE_IPC_HOOK_CLI
@@ -100,4 +109,6 @@ exec setpriv \
     VSCODE_IPC_HOOK_CLI= \
     BROWSER= \
     IS_SANDBOX=1 \
+    GIT_CONFIG_GLOBAL=/etc/claude-gitconfig \
+    GIT_CONFIG_SYSTEM=/dev/null \
     claude --allow-dangerously-skip-permissions --permission-mode auto
