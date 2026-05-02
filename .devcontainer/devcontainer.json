@@ -57,6 +57,9 @@
         "--net=host",
         // Make sure SELinux does not disable with access to host filesystems like tmp
         "--security-opt=label=disable",
+        // Block setuid/setgid escalation. Safe here: rootless container runs
+        // as root and has no need for sudo, so nothing legitimate elevates.
+        "--security-opt=no-new-privileges",
         // Required for `unshare -m` in the `just claude` recipe; without it,
         // rootless podman blocks mount-namespace creation. See README-CLAUDE.md.
         "--cap-add=SYS_ADMIN"
