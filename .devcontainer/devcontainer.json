@@ -22,7 +22,11 @@
         "UV_PROJECT_ENVIRONMENT": "/cache/venv-for${localWorkspaceFolder}",
         // Do the equivalent of "activate" the venv so we don't have to "uv run" everything
         "VIRTUAL_ENV": "/cache/venv-for${localWorkspaceFolder}",
-        "PATH": "/cache/venv-for${localWorkspaceFolder}/bin:${containerEnv:PATH}"
+        "PATH": "/cache/venv-for${localWorkspaceFolder}/bin:${containerEnv:PATH}",
+        // Steer gh and glab into the per-devcontainer private cache so their
+        // auth state survives rebuilds without one named volume per CLI.
+        "GH_CONFIG_DIR": "/private-cache/gh",
+        "GLAB_CONFIG_DIR": "/private-cache/glab"
     },
     "customizations": {
         "vscode": {
@@ -77,16 +81,14 @@
             "target": "/cache",
             "type": "volume"
         },
-        // Persist gh auth across container rebuilds with per-repo scoped PAT
+        // Per-devcontainer private cache (counterpart to devcontainer-shared-cache,
+        // but scoped to this workspace folder, not shared across devcontainers).
+        // Currently holds gh and glab auth state — steered here via GH_CONFIG_DIR
+        // / GLAB_CONFIG_DIR in remoteEnv. Future per-folder caches can drop
+        // subdirs alongside.
         {
-            "source": "gh-auth-${localWorkspaceFolderBasename}",
-            "target": "/root/.config/gh",
-            "type": "volume"
-        },
-        // Persist glab auth across container rebuilds (GitLab CLI)
-        {
-            "source": "glab-auth-${localWorkspaceFolderBasename}",
-            "target": "/root/.config/glab-cli",
+            "source": "devcontainer-private-cache-${localWorkspaceFolderBasename}",
+            "target": "/private-cache",
             "type": "volume"
         },
         // Mount Claude config (settings, memory, skills) from a shared

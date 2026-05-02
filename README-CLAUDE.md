@@ -22,7 +22,7 @@ exposed, and how to verify the sandbox is intact.
 | Host gitconfig (custom credential helpers, `url.insteadOf`, `core.hooksPath`) | `GIT_CONFIG_*` env redirect + bind-mask of `/root/.gitconfig` and `/etc/gitconfig` | check 6 |
 | VS Code OAuth popup hijack | Askpass env vars blanked + IPC socket masked | check 2 |
 | X11 cookie reuse via shared netns | `DISPLAY`/`XAUTHORITY` blanked, `.Xauthority` bound to `/dev/null`, server refuses handshake | check 11 |
-| Token sprawl across projects | Per-repo named volumes (`gh-auth-${repo}`, `glab-auth-${repo}`) | manual |
+| Token sprawl across projects | Per-folder named volume `devcontainer-private-cache-${localWorkspaceFolderBasename}` mounted at `/private-cache`; `GH_CONFIG_DIR` / `GLAB_CONFIG_DIR` steer the CLIs into it | manual |
 | Orphan Claude after parent shell dies | `setpriv --pdeathsig SIGKILL` | manual |
 
 Run `/verify-sandbox` from inside Claude to execute every check.
@@ -198,13 +198,25 @@ refuses to run Claude if `IS_SANDBOX` is unset, `SSH_AUTH_SOCK` is
 set, or the path `GIT_ASKPASS` references is reachable. This catches
 regressions where an env-blank silently stops being applied.
 
-### Per-repo authentication
+### Per-folder authentication
 
-**Stops:** token sprawl. Each project gets its own scoped PAT.
+**Stops:** token sprawl. Each workspace folder gets its own scoped PATs.
 
-**How:** `gh-auth-${repo}` and `glab-auth-${repo}` are named volumes,
-not bind mounts. Authenticate once per repo with `just gh-auth` /
-`just glab-auth`; the token survives container rebuilds.
+**How:** a single named volume
+`devcontainer-private-cache-${localWorkspaceFolderBasename}` is mounted
+at `/private-cache`, and `remoteEnv` sets
+`GH_CONFIG_DIR=/private-cache/gh` and
+`GLAB_CONFIG_DIR=/private-cache/glab` so both CLIs write their auth
+state into per-tool subdirs of that volume. Authenticate once with
+`just gh-auth` / `just glab-auth`; the tokens survive container
+rebuilds.
+
+The volume is the per-devcontainer counterpart to
+`devcontainer-shared-cache` (mounted at `/cache`, shared across every
+template-derived devcontainer): same caching pattern, but scoped to
+this workspace folder. Future per-folder caches can drop subdirs into
+`/private-cache/` alongside `gh/` and `glab/`. Two checkouts sharing
+the same folder basename will share the volume.
 
 ### Process lifetime
 
