@@ -12,7 +12,7 @@
 # setpriv --pdeathsig SIGKILL inside the inner script is the
 # belt-and-braces backup. See README-CLAUDE.md for the full sandbox model.
 claude:
-    exec unshare -m -p -i --fork --mount-proc --propagation private --kill-child .devcontainer/claude-sandbox.sh
+    exec unshare -m -p -i --fork --mount-proc --propagation private --kill-child bash .devcontainer/claude-sandbox.sh
 
 
 # Authenticate gh CLI with a GitHub PAT (token not stored in shell history)
