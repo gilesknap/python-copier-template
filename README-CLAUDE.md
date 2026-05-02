@@ -53,56 +53,43 @@ and how to verify the sandbox is intact.
   `apt-get install` postinst scripts that chown logs to system users
   will fail; install system packages from a non-Claude terminal if you
   need that.
-- **No host SSH keys, AWS/GCP/Azure/Docker credentials, GPG keys, or
-  netrc.** The same `unshare -m` masks `/root/.ssh`, `/root/.gnupg`,
-  `/root/.aws`, `/root/.azure`, `/root/.gcloud`, `/root/.docker`, and
-  `/root/.netrc` (where present) with empty tmpfs. This means you *can*
-  bind-mount your host `~/.ssh` into the container if you want to use
-  SSH keys from a regular terminal — Claude's namespace blanks them out
-  while non-Claude shells see the originals. `SSH_AUTH_SOCK` is blanked
-  in the namespace exec line so VS Code's agent forwarding (which the
-  user terminal keeps) cannot reach Claude.
+- **No host SSH keys, AWS/GCP/Azure/Docker credentials, GPG keys, netrc,
+  or X11 cookies.** The same `unshare -m` masks the credential
+  directories `/root/.ssh`, `/root/.gnupg`, `/root/.aws`, `/root/.azure`,
+  `/root/.gcloud`, `/root/.docker` with empty tmpfs, and bind-masks the
+  single-file credentials `/root/.netrc`, `/root/.Xauthority`, and
+  `/root/.ICEauthority` to `/dev/null`. This means you *can* bind-mount
+  your host `~/.ssh` (or `.Xauthority`) into the container if you want
+  to use them from a regular terminal — Claude's namespace blanks them
+  out while non-Claude shells see the originals. `SSH_AUTH_SOCK` is
+  blanked in the namespace exec line so VS Code's agent forwarding
+  (which the user terminal keeps) cannot reach Claude.
 - **Claude dies with its parent shell.** `setpriv --pdeathsig SIGKILL`
   on the inner `claude` exec sets `PR_SET_PDEATHSIG`, so if the wrapping
   `unshare`'d shell exits (terminal closed, Ctrl-C, etc.) the kernel
   immediately kills Claude — there's no orphaned-claude window where the
   namespace context is gone but Claude is still running tools.
-- **Claude's git is redirected away from the host gitconfigs by env
-  vars, not bind mounts.** `claude-sandbox.sh` writes
-  `/etc/claude-gitconfig` containing only the in-container gh/glab
-  credential helpers, the `git@*:` → `https://` url rewrites,
-  `safe.directory = *`, and the user identity (read from the
-  host-copied gitconfig before the env redirection takes effect, so
-  commits Claude makes are still attributed). The exec line then sets
+- **Claude's git is redirected away from the host gitconfigs in two
+  layers.** `claude-sandbox.sh` writes `/etc/claude-gitconfig`
+  containing only the in-container gh/glab credential helpers, the
+  `git@*:` → `https://` url rewrites, `safe.directory = *`, and the
+  user identity (read from the host-copied gitconfig *before* the
+  bind mask below takes effect, so commits Claude makes are still
+  attributed). Layer 1: the exec line sets
   `GIT_CONFIG_GLOBAL=/etc/claude-gitconfig` and
-  `GIT_CONFIG_SYSTEM=/dev/null`, so git ignores `/root/.gitconfig`
-  (host per-user config) and `/etc/gitconfig` (host system-scope
-  credential helper) entirely. Process env on Claude's tree — not in
-  the mount table, not invalidated by file-level operations in the
-  parent. The user's regular terminal keeps the original
-  `/root/.gitconfig` (host content, copied by
-  `dev.containers.copyGitConfig`'s default), so the host's SSH url
-  rewrites, custom credential helpers, and identity all work normally
-  outside Claude.
-
-  An earlier version of this script `mount --bind`'d the curated file
-  over `/root/.gitconfig` and `/dev/null` over `/etc/gitconfig`. Both
-  binds were silently invalidated mid-session: VS Code's
-  `dev.containers.copyGitConfig` rewrites `/root/.gitconfig` on every
-  reconnect via `write-tmp + rename(2)`, which replaces the dentry the
-  bind was attached to. The mount table entry orphans and the path
-  reverts to the parent's view — no `umount`, no propagation breach,
-  no `CAP_SYS_ADMIN` reach-in required. **File-bind mounts on the
-  shared overlay filesystem are fragile under atomic-rename rewrites
-  in the parent namespace.** Tmpfs-over-a-directory mounts (`/tmp`,
-  `/root/.ssh`) are immune to this specific failure because nothing
-  atomically replaces directory dentries. Tools that ignore
-  `GIT_CONFIG_GLOBAL` and read `/root/.gitconfig` directly will see
-  the host content, but every credential bridge that content
-  references — VS Code's git-credential helper script, the SSH agent
-  socket, the askpass shim — lives in `/tmp` (tmpfs-masked) or under
-  `/run/user` (tmpfs-masked when present), so reading the path doesn't
-  yield reachable credentials.
+  `GIT_CONFIG_SYSTEM=/dev/null`, so git itself reads from the curated
+  file and ignores `/root/.gitconfig` (host per-user config) and
+  `/etc/gitconfig` (host system-scope credential helper). Layer 2: a
+  `mount --bind /dev/null` over each of those two paths inside Claude's
+  mount namespace, so that direct file reads (`cat /root/.gitconfig`,
+  or any tool that ignores `GIT_CONFIG_*` and opens the file directly)
+  also return empty. The bind lives only inside the per-launch mount
+  ns; VS Code's `dev.containers.copyGitConfig` keeps atomically
+  rewriting `/root/.gitconfig` in the *parent* namespace where our
+  bind is invisible. The user's regular terminal keeps the original
+  `/root/.gitconfig` (host content), so the host's SSH url rewrites,
+  custom credential helpers, and identity all work normally outside
+  Claude.
 - **The "log in to GitHub" popup is closed for Claude.** The user
   terminal keeps `git.terminalAuthentication` at its default (true), so
   `GIT_ASKPASS` and `VSCODE_GIT_IPC_HANDLE` are injected into terminals
@@ -110,10 +97,13 @@ and how to verify the sandbox is intact.
   operation needs credentials. For Claude two things close that channel:
   `claude-sandbox.sh`'s exec line blanks `GIT_ASKPASS`,
   `VSCODE_GIT_IPC_HANDLE`, `VSCODE_GIT_ASKPASS_NODE`,
-  `VSCODE_GIT_ASKPASS_MAIN`, `VSCODE_IPC_HOOK_CLI`, and `BROWSER`; and
-  the IPC socket the askpass script would talk to lives in `/tmp`,
-  which is tmpfs-masked. Both layers must be defeated for Claude to
-  surface a popup.
+  `VSCODE_GIT_ASKPASS_MAIN`, `VSCODE_IPC_HOOK_CLI`, `BROWSER`, and
+  `DISPLAY`; and the IPC socket the askpass script would talk to lives
+  in `/tmp`, which is tmpfs-masked. Both layers must be defeated for
+  Claude to surface a popup. `DISPLAY` is in the same blank list to
+  stop Claude from finding the host X server by environment — see the
+  abstract-socket discussion under `--net=host` below for the second
+  layer of X11 defence.
 
   `.claude/hooks/sandbox-check.sh` is the periodic verifier: it fires
   on every prompt submit and refuses to run Claude if `IS_SANDBOX` is
@@ -133,7 +123,8 @@ in the devcontainer feels natural:
 - **Host gitconfig copied in.** `dev.containers.copyGitConfig` defaults
   to true, so `/root/.gitconfig` carries the user's name, email, push
   preferences, and any host url rewrites. Claude overrides this via
-  bind-mount; the user terminal sees the original.
+  `GIT_CONFIG_*` env vars plus a bind-mount to `/dev/null` inside its
+  namespace; the user terminal sees the original.
 - **SSH agent forwarding.** VS Code forwards the host SSH agent into
   the container as it normally would; `SSH_AUTH_SOCK` points at
   `/tmp/vscode-ssh-auth-*.sock`. Inside Claude's namespace `/tmp` is
@@ -189,6 +180,15 @@ in the devcontainer feels natural:
   only by "the caller is on localhost" should be assumed reachable. Don't
   run unauthenticated services with secrets bound to `127.0.0.1` while
   using Claude.
+
+  The X11 abstract socket is reachable but not usable: `DISPLAY` is
+  blanked, `XAUTHORITY` is unset, and `/root/.Xauthority` /
+  `/root/.ICEauthority` are bind-masked to `/dev/null`. A connect to
+  `@/tmp/.X11-unix/X0` succeeds at the kernel layer but the X server
+  rejects the protocol handshake with "Authorization required" — no
+  `XQueryKeymap`, `XGetImage`, or `XTestFakeKeyEvent` is reachable
+  without the cookie. Both the env-blank and the cookie-mask must be
+  defeated for an X11 attack to land.
 - **`/cache` is a shared named volume across all devcontainers** built
   from this template — uv cache, pre-commit cache, and the project venv
   live there. Faster rebuilds; the trade-off is that a poisoned cache
@@ -209,6 +209,8 @@ echo "GIT_ASKPASS='${GIT_ASKPASS:-<unset>}'"
 echo "VSCODE_GIT_IPC_HANDLE='${VSCODE_GIT_IPC_HANDLE:-<unset>}'"
 echo "VSCODE_IPC_HOOK_CLI='${VSCODE_IPC_HOOK_CLI:-<unset>}'"
 echo "BROWSER='${BROWSER:-<unset>}'"
+echo "DISPLAY='${DISPLAY:-<unset>}'"
+echo "XAUTHORITY='${XAUTHORITY:-<unset>}'"
 echo "IS_SANDBOX='${IS_SANDBOX:-<unset>}'"          # should be 1
 ssh-add -l                                          # "Could not open a connection..."
 
@@ -235,15 +237,32 @@ cat /proc/sysvipc/shm /proc/sysvipc/msg /proc/sysvipc/sem  # only headers
 
 # /root/.ssh and friends should be empty even if you bind-mount the host
 # originals via devcontainer.json — Claude's namespace masks them.
+# .Xauthority / .ICEauthority / .netrc are bound to /dev/null (file masks
+# rather than tmpfs because they're files, not dirs).
 ls /root/.ssh /root/.gnupg /root/.aws 2>/dev/null   # all empty (or missing)
+cat /root/.Xauthority /root/.ICEauthority /root/.netrc 2>/dev/null  # all empty
 
-# Git redirection via env vars, not mount table. /root/.gitconfig is
-# expected to show the host content; git ignores it because
-# GIT_CONFIG_GLOBAL points elsewhere.
+# Gitconfig defence: env vars steer git, bind-mounts to /dev/null close
+# the direct-file-read path. Both must be in place.
 echo "$GIT_CONFIG_GLOBAL"                           # /etc/claude-gitconfig
 echo "$GIT_CONFIG_SYSTEM"                           # /dev/null
+cat /root/.gitconfig                                # empty (bound to /dev/null)
+cat /etc/gitconfig                                  # empty (bound to /dev/null)
 git config --global --list | grep -E 'credential|insteadof'  # curated only
 git config --system --list                          # empty (reads /dev/null)
+
+# X11 server is unauthenticated from inside: connect succeeds (shared net
+# ns) but handshake is refused without a cookie. First reply byte 0x00
+# is "refused" (PASS), 0x01 is "accepted" (LEAK), 0x02 is "auth required"
+# (LEAK — server willing to accept a cookie if Claude can find one).
+python3 -c "
+import socket, struct
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect('\0/tmp/.X11-unix/X0')
+s.sendall(struct.pack('=BxHHHHxx', ord('l'), 11, 0, 0, 0))
+b = s.recv(1)
+print('X11 first byte:', b.hex(), '(00=refused PASS, 01=accepted LEAK, 02=auth-required LEAK)')
+"
 
 # Should return creds only if `just gh-auth` has been run for this repo.
 printf 'protocol=https\nhost=github.com\n\n' | git credential fill
@@ -251,8 +270,9 @@ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
 
 If `git credential fill` returns a `password=gho_...` for github.com when
 you have not run `just gh-auth`, or if `ls /tmp` shows any `vscode-*`
-entries inside the namespace, the sandbox is leaking — open an issue
-against the python-copier-template.
+entries inside the namespace, or if the X11 first reply byte is anything
+but `0x00`, the sandbox is leaking — open an issue against the
+python-copier-template.
 
 ## Authenticating
 
@@ -266,9 +286,3 @@ just glab-auth   # gitlab.com  (pass a hostname arg for self-hosted instances)
 ```bash
 just claude      # runs `claude --allow-dangerously-skip-permissions --permission-mode auto` inside the mount namespace
 ```
-
-After a rebuild from a previous version of this template, the user
-terminal's `/root/.gitconfig` may still carry HTTPS rewrites or per-host
-helpers that older `postStart.sh` runs added globally. Either rebuild
-the devcontainer for a clean state, or `git config --global --unset-all`
-the affected keys.
