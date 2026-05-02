@@ -49,8 +49,7 @@
                 "redhat.vscode-yaml",
                 "ryanluker.vscode-coverage-gutters",
                 "charliermarsh.ruff",
-                "ms-azuretools.vscode-docker",
-                "anthropic.claude-code"
+                "ms-azuretools.vscode-docker"
             ]
         }
     },

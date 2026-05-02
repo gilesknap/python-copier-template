@@ -43,6 +43,7 @@ persist past the shell that launched it.
 | **Sibling repos** under `${localWorkspaceFolder}/..` | Lets `pip install -e ../peer-repo` work and lets Claude read across related projects when asked | Don't keep unrelated sensitive work in the same parent dir |
 | **Shared `/cache` volume** (uv, pre-commit, project venv) across all template containers | Faster rebuilds | A poisoned cache spreads to every project sharing the volume |
 | **Shared `~/.config/terminal-config/.claude`** | Install a skill once, every devcontainer picks it up | Treat this dir on the host as part of the sandbox boundary, not outside it |
+| **No `anthropic.claude-code` IDE integration** — Claude runs CLI-only inside `just claude` | The extension talks to the host VS Code via the same `/tmp` IPC sockets and `VSCODE_IPC_HOOK_CLI` env var the sandbox masks; opening one bridge for it would expose the extension's full API (open files in host editor, drive the clipboard, etc.) to a malicious prompt — re-enabling it defeats the sandbox | Use terminal-side `git diff` / `git log` and copy-paste selection text. Don't add the extension back to `devcontainer.json` |
 
 <details>
 <summary>Sharing <code>.claude</code> with a host-side Claude install</summary>
