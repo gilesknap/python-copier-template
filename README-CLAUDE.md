@@ -56,6 +56,39 @@ symlink before the first container build:
 rm -rf ~/.config/terminal-config/.claude    # only if empty / disposable
 ln -s ~/.claude ~/.config/terminal-config/.claude
 ```
+
+**Gotcha — `env` block in `~/.claude/settings.json`.** Claude Code
+applies `settings.json`'s `env` block to every subprocess it spawns
+— hooks *and* tool calls — layered on top of the env it inherited at
+launch. The setting wins over `claude-sandbox.sh`'s exec-line
+`GIT_CONFIG_*` redirects for those subprocesses, even though the
+`claude` process itself still sees the sandboxed values
+(`/proc/1/environ` is correct; the hook/tool env is not).
+
+The host-side gotcha case: if your host shell uses raw `git` against
+GitHub *and* your host gitconfig has a `git@github.com:` →
+`ssh://...` `insteadOf` rewrite, you typically neutralise it for
+Claude-driven raw `git` by setting
+
+```jsonc
+// ~/.claude/settings.json on the host
+{ "env": { "GIT_CONFIG_GLOBAL": "/home/you/.gitconfig-claude" } }
+```
+
+Once you symlink `~/.claude` into the devcontainer, that *host* path
+gets re-injected into every hook/tool subprocess inside the container,
+where it doesn't exist. `git` then treats global config as empty: the
+curated `/etc/claude-gitconfig` (gh/glab credential helpers, user
+identity, URL rewrites) is silently bypassed for every Claude-driven
+git operation, while the `claude` process's own env still looks fine.
+The sandbox-check hook's `GIT_CONFIG_GLOBAL` assertion catches it.
+
+The same trap applies to any `env` entry whose value is a host-only
+path or assumption (`HOME`, `XDG_*`, tool-cache dirs, …). Audit
+`~/.claude/settings.json`'s `env` before sharing; either drop the
+entries that don't translate, or pin them to the in-container value
+(e.g. `GIT_CONFIG_GLOBAL: /etc/claude-gitconfig`) so the override goes
+the *right* way.
 </details>
 
 ## What's locked down
