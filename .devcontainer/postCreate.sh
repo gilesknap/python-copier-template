@@ -46,7 +46,6 @@ if [ -f .gitmodules ]; then
     missing=$(git submodule status | awk '/^-/ {print $2}')
     [ -n "$missing" ] && git submodule update --init $missing
 fi
-{% if add_claude %}
+
 # Install Claude Code CLI
 curl -fsSL https://claude.ai/install.sh | bash
-{% endif -%}

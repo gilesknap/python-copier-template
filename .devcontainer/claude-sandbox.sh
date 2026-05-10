@@ -1,0 +1,1 @@
+../template/.devcontainer/{% if add_claude %}claude-sandbox.sh{% endif %}

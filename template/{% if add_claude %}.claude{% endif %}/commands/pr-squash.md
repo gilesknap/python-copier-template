@@ -1,0 +1,1 @@
+../../../.claude/commands/pr-squash.md

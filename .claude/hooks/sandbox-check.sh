@@ -1,0 +1,1 @@
+../../template/{% if add_claude %}.claude{% endif %}/hooks/sandbox-check.sh
